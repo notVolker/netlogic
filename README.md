@@ -40,6 +40,7 @@ public class LoadChart : BaseNetLogic
 
 
 
+# logic
 
 That’s the same idea as the template approach from my first message, just written differently. The code doesn’t convert JavaScript into C#. Each line of HTML and JavaScript is still JavaScript, wrapped in a C# string, and AppendLine just stacks those strings into one big HTML text.
 
