@@ -2,6 +2,7 @@
 
 # chart.html
 
+```html
 <!DOCTYPE html>
 <html>
 <head><script src="echarts.min.js"></script></head>
@@ -18,10 +19,12 @@ window.addEventListener('resize', () => chart.resize());
 </script>
 </body>
 </html>
+```
 
 
 # netlogic
 
+```csharp
 using System.IO;
 using FTOptix.NetLogic;
 using FTOptix.WebUI;
@@ -37,7 +40,7 @@ public class LoadChart : BaseNetLogic
         browser.URL = "file:///" + path.Replace("\\", "/");
     }
 }
-
+```
 
 
 # logic
