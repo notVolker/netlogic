@@ -51,7 +51,7 @@ var germany = [7000, 15000, 22000, 28000, 33000, 38000, 43000];
 var france  = [8000, 13000, 20000, 26000, 31000, 35000, 37000];
 var japan   = [3000, 9000, 24000, 30000, 36000, 39000, 41000];
 var brazil  = [2000, 4000, 8000, 12000, 15000, 18000, 24000];
-var output  = [0, 10000, 0, 10000, 0, 10000, 0];  // sample bar values
+var output  = [0, 10000, 0, 10000, 10000, 10000, 0];
 
 option = {
   title: { text: 'Income by Country' },
@@ -60,30 +60,11 @@ option = {
   xAxis: { type: 'category', data: years },
   yAxis: { name: 'Income' },
   series: [
-    {
-      name: 'Output',
-      type: 'bar',
-      data: output,
-      itemStyle: { opacity: 0.5 }
-    },
-    {
-      name: 'Germany',
-      type: 'line',
-      data: germany,
-      markLine: {
-        symbol: 'none',
-        label: { formatter: '{b}: {c}' },
-        data: [
-          { yAxis: 40000, name: 'High limit',    lineStyle: { color: 'red' } },
-          { yAxis: 30000, name: 'Setpoint',      lineStyle: { color: 'green' } },
-          { yAxis: 20000, name: 'Low limit',     lineStyle: { color: 'orange' } },
-          { yAxis: 10000, name: 'Low-low limit', lineStyle: { color: 'purple' } }
-        ]
-      }
-    },
-    { name: 'France', type: 'line', data: france },
-    { name: 'Japan',  type: 'line', data: japan },
-    { name: 'Brazil', type: 'line', data: brazil }
+    { name: 'Output',  type: 'bar',  data: output, itemStyle: { opacity: 0.5 } },
+    { name: 'Germany', type: 'line', data: germany },
+    { name: 'France',  type: 'line', data: france },
+    { name: 'Japan',   type: 'line', data: japan },
+    { name: 'Brazil',  type: 'line', data: brazil }
   ]
 };
 ```
