@@ -43,38 +43,47 @@ public class LoadChart : BaseNetLogic
 ```
 
 
-# logic
+# echarts
 
-That’s the same idea as the template approach from my first message, just written differently. The code doesn’t convert JavaScript into C#. Each line of HTML and JavaScript is still JavaScript, wrapped in a C# string, and AppendLine just stacks those strings into one big HTML text.
+```echarts
+var years   = [1950, 1960, 1970, 1980, 1990, 2000, 2010];
+var germany = [7000, 15000, 22000, 28000, 33000, 38000, 43000];
+var france  = [8000, 13000, 20000, 26000, 31000, 35000, 37000];
+var japan   = [3000, 9000, 24000, 30000, 36000, 39000, 41000];
+var brazil  = [2000, 4000, 8000, 12000, 15000, 18000, 24000];
+var output  = [0, 10000, 0, 10000, 0, 10000, 0];  // sample bar values
 
-csharp
-var sb = new StringBuilder();
-sb.AppendLine("<!DOCTYPE html>");
-sb.AppendLine("<html><head>");
-sb.AppendLine("<script src='echarts.min.js'></script>");
-sb.AppendLine("</head><body style='margin:0'>");
-sb.AppendLine("<div id='c' style='width:100vw;height:100vh'></div>");
-sb.AppendLine("<script>");
-sb.AppendLine("var chart = echarts.init(document.getElementById('c'));");
-sb.AppendLine("chart.setOption({");
-sb.AppendLine("  xAxis:{type:'category',data:['Mon','Tue','Wed']},");
-sb.AppendLine("  yAxis:{type:'value'},");
-sb.AppendLine("  series:[{type:'line',data:[12,18,9]}]");
-sb.AppendLine("});");
-sb.AppendLine("</script></body></html>");
-
-File.WriteAllText(htmlPath, sb.ToString());
-
-Then the NetLogic points the WebBrowser at that file, or in some projects sets the HTML straight into the widget.
-
-Why people do it this way
-
-The NetLogic can insert live values into the chart (for a Pareto chart, the defect names and counts from SQL) with AppendLine("data:" + json + ",").
-No separate chart.html has to be copied around with the project.
-
-Converting your own ECharts code
-
-Take each line of the HTML/JS.
-Wrap it in sb.AppendLine("...").
-Use single quotes inside the JavaScript so you don’t have to escape double quotes.
-Replace the hardcoded data arrays with C# variables.
+option = {
+  title: { text: 'Income by Country' },
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['Output', 'Germany', 'France', 'Japan', 'Brazil'], right: 10 },
+  xAxis: { type: 'category', data: years },
+  yAxis: { name: 'Income' },
+  series: [
+    {
+      name: 'Output',
+      type: 'bar',
+      data: output,
+      itemStyle: { opacity: 0.5 }
+    },
+    {
+      name: 'Germany',
+      type: 'line',
+      data: germany,
+      markLine: {
+        symbol: 'none',
+        label: { formatter: '{b}: {c}' },
+        data: [
+          { yAxis: 40000, name: 'High limit',    lineStyle: { color: 'red' } },
+          { yAxis: 30000, name: 'Setpoint',      lineStyle: { color: 'green' } },
+          { yAxis: 20000, name: 'Low limit',     lineStyle: { color: 'orange' } },
+          { yAxis: 10000, name: 'Low-low limit', lineStyle: { color: 'purple' } }
+        ]
+      }
+    },
+    { name: 'France', type: 'line', data: france },
+    { name: 'Japan',  type: 'line', data: japan },
+    { name: 'Brazil', type: 'line', data: brazil }
+  ]
+};
+```
