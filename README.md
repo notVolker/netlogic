@@ -58,7 +58,13 @@ option = {
   tooltip: { trigger: 'axis' },
   legend: { data: ['Output', 'Germany', 'France', 'Japan', 'Brazil'], right: 10 },
   xAxis: { type: 'category', data: years },
-  yAxis: { name: 'Income' },
+  yAxis: {
+    name: 'Income',
+    min: 0,
+    max: 50000,
+    interval: 10000,
+    axisLabel: { formatter: function (v) { return v / 1000 + 'k'; } }
+  },
   series: [
     { name: 'Output',  type: 'bar',  data: output, itemStyle: { opacity: 0.5 } },
     { name: 'Germany', type: 'line', data: germany },
