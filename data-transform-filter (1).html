@@ -1,0 +1,75 @@
+<!--
+	THIS EXAMPLE WAS DOWNLOADED FROM https://echarts.apache.org/examples/en/editor.html?c=data-transform-filter&code=dVLBTsMwDL1P2j_41kuFWraxrRMHQALBhQPHaYesCyWoTaosQytT_53YTjbQxsVO6veenVd_CQudFHYLALewzOeTLIV8fkNxSnFGce7jdZZRzLPVYjhAaiVtI3SH1CkV8wljAnRGaTTixLcx3qLAuxW6lNSbqzljkY_phpk5JxYfYaso8ClaoXl4Zs6ZOGYoy4yCDNfGqBb5ayu-VU18npmJYRj-FB6V80eSjnSzc-3OER0R3O50-puINRyY1imjPeUwHAA45WpZwAGc3LsCkmddmkbCuoMHs9POdgn0KQGNqZ1qCWpV5a33aLFX2wioZSX1Busb4UQBy-SVpktSSJ74R-HxkSzH0wt6h4d7MiFZpeCFP_wUeRY093e-AbXsWj9lUgonK-OHSkMTXh4GdxGsRYNgfkocbyutkr68xAucUMchY4-1sHhjfTY4BeVk8-Y6tsq0olSuKyC7mkAf9H9Jnl4bJGul8cUsGZf2jHZ05iItrOoZK7p4mcX7eUYKjv_TKixlj6TVcNAvfgA&enc=deflate
+	⚠ Please be aware that this chart is not an official demo of Apache ECharts but is made by user-generated code.
+-->
+<!DOCTYPE html>
+<html lang="en" style="height: 100%">
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="height: 100%; margin: 0">
+  <div id="container" style="height: 100%"></div>
+
+  
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  
+  <!-- Uncomment this line if you want to dataTool extension
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5/dist/extension/dataTool.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to use gl extension
+  <script type="text/javascript" src="https://echarts.apache.org/en/js/vendors/echarts-gl/dist/echarts-gl.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to echarts-stat extension
+  <script type="text/javascript" src="https://echarts.apache.org/en/js/vendors/echarts-stat/dist/ecStat.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to echarts-graph-modularity extension
+  <script type="text/javascript" src="https://echarts.apache.org/en/js/vendors/echarts-graph-modularity/dist/echarts-graph-modularity.min.js"></script>
+  -->
+  <!-- Uncomment this line if you want to use map
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@4.9.0/map/js/world.js"></script>
+  -->
+  <!-- Uncomment these two lines if you want to use bmap extension
+  <script type="text/javascript" src="https://api.map.baidu.com/api?v=3.0&ak=YOUR_API_KEY"></script>
+  <script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts@5/dist/extension/bmap.min.js"></script>
+  -->
+
+  <script type="text/javascript">
+    var dom = document.getElementById('container');
+    var myChart = echarts.init(dom, null, {
+      renderer: 'canvas',
+      useDirtyRect: false
+    });
+    var app = {};
+    
+    var option;
+
+    var years   = [1950, 1960, 1970, 1980, 1990, 2000, 2010];
+var germany = [7000, 15000, 22000, 28000, 33000, 38000, 43000];
+var france  = [8000, 13000, 20000, 26000, 31000, 35000, 37000];
+var japan   = [3000, 9000, 24000, 30000, 36000, 39000, 41000];
+var brazil  = [2000, 4000, 8000, 12000, 15000, 18000, 24000];
+var output  = [0, 10000, 0, 10000, 10000, 10000, 0];
+
+option = {
+  title: { text: 'Income by Country' },
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['Output', 'Germany', 'France', 'Japan', 'Brazil'], right: 10 },
+  xAxis: { type: 'category', data: years },
+  yAxis: { name: 'Income' },
+  series: [
+    { name: 'Output',  type: 'bar',  data: output, itemStyle: { opacity: 0.5 } },
+    { name: 'Germany', type: 'line', data: germany },
+    { name: 'France',  type: 'line', data: france },
+    { name: 'Japan',   type: 'line', data: japan },
+    { name: 'Brazil',  type: 'line', data: brazil }
+  ]
+};
+
+    if (option && typeof option === 'object') {
+      myChart.setOption(option);
+    }
+
+    window.addEventListener('resize', myChart.resize);
+  </script>
+</body>
+</html>
