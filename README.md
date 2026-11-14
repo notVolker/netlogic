@@ -134,3 +134,4 @@ public class EChartsLogic : BaseNetLogic
     }
 }
 ```
+need to connect chart to database and make it appear data 
