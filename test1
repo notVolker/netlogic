@@ -1,0 +1,563 @@
+#region Using directives
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using FTOptix.HMIProject;
+using FTOptix.NetLogic;
+using FTOptix.Store;
+using UAManagedCore;
+using OpcUa = UAManagedCore.OpcUa;
+#endregion
+
+public class FeederMillChartLogic : BaseNetLogic
+{
+    private PeriodicTask refreshTask;
+    private readonly List<IUAVariable> watched = new List<IUAVariable>();
+    private readonly object sync = new object();
+    private string lastUrl = "";
+
+    public override void Start()
+    {
+        // Regenerate immediately when the client changes limits or the time range
+        foreach (var name in new[] { "MaxLimit", "MinLimit", "TimeRangeMinutes" })
+        {
+            var v = LogicObject.GetVariable(name);
+            if (v != null)
+            {
+                v.VariableChange += OnSettingChanged;
+                watched.Add(v);
+            }
+        }
+
+        GenerateChart();
+
+        int period = Math.Max(2000, GetInt("RefreshRateMs", 10000));
+        refreshTask = new PeriodicTask(GenerateChart, period, LogicObject);
+        refreshTask.Start();
+    }
+
+    public override void Stop()
+    {
+        foreach (var v in watched)
+            v.VariableChange -= OnSettingChanged;
+        watched.Clear();
+
+        if (refreshTask != null)
+        {
+            refreshTask.Dispose();
+            refreshTask = null;
+        }
+    }
+
+    // Can also be called from a button in the UI
+    [ExportMethod]
+    public void Refresh()
+    {
+        GenerateChart();
+    }
+
+    private void OnSettingChanged(object sender, VariableChangeEventArgs e)
+    {
+        GenerateChart();
+    }
+
+    // ------------------------------------------------------------------
+    // Main flow: query -> build HTML -> write file -> point WebBrowser
+    // ------------------------------------------------------------------
+    private void GenerateChart()
+    {
+        lock (sync)
+        {
+            try
+            {
+                ChartData data = LoadData();
+                string json = BuildJson(data, GetNullableDouble("MaxLimit"), GetNullableDouble("MinLimit"));
+                string html = BuildHtml(json);
+                PublishHtml(html);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("FeederMillChartLogic", ex.Message);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Database
+    // ------------------------------------------------------------------
+    private class ChartData
+    {
+        public List<double[]> FeedRate = new List<double[]>();   // [ts, value]
+        public List<double[]> SetPoint = new List<double[]>();   // [ts, value]
+        public List<double[]> States = new List<double[]>();     // [start, end, 1|0]
+    }
+
+    private ChartData LoadData()
+    {
+        var data = new ChartData();
+
+        string storePath = GetString("StorePath", "DataStores/ODBCDatabase1");
+        var store = Project.Current.Get<Store>(storePath);
+        if (store == null)
+            throw new Exception("Store not found: " + storePath);
+
+        string table = QuoteTable(GetString("TableName", "FeederMillLog"));
+        string tsCol = Quote(GetString("TimestampColumn", "Timestamp"));
+        string frCol = Quote(GetString("FeedRateColumn", "FeedRate"));
+        string spCol = Quote(GetString("SetPointColumn", "SetPoint"));
+        string rsCol = Quote(GetString("RunningStateColumn", "RunningState"));
+        int rangeMin = GetInt("TimeRangeMinutes", 0);
+        bool isUtc = GetBool("TimestampIsUtc", true);
+
+        var sql = new StringBuilder();
+        sql.Append("SELECT ").Append(tsCol).Append(", ").Append(frCol).Append(", ")
+           .Append(spCol).Append(", ").Append(rsCol)
+           .Append(" FROM ").Append(table);
+
+        // Window is relative to the newest record, so no clock/time zone issues
+        if (rangeMin > 0)
+        {
+            sql.Append(" WHERE ").Append(tsCol)
+               .Append(" >= DATEADD(MINUTE, -").Append(rangeMin.ToString(CultureInfo.InvariantCulture))
+               .Append(", (SELECT MAX(").Append(tsCol).Append(") FROM ").Append(table).Append("))");
+        }
+        sql.Append(" ORDER BY ").Append(tsCol).Append(" ASC");
+
+        string[] header;
+        object[,] rows;
+        store.Query(sql.ToString(), out header, out rows);
+
+        int n = rows == null ? 0 : rows.GetLength(0);
+        bool? currentState = null;
+        double segStart = 0, lastTs = 0;
+
+        for (int i = 0; i < n; i++)
+        {
+            double ts;
+            if (!TryTimestamp(rows[i, 0], isUtc, out ts)) continue;
+
+            double fr, sp, st;
+            if (TryNumber(rows[i, 1], out fr)) data.FeedRate.Add(new[] { ts, fr });
+            if (TryNumber(rows[i, 2], out sp)) data.SetPoint.Add(new[] { ts, sp });
+
+            // Collapse consecutive identical states into one segment
+            if (TryNumber(rows[i, 3], out st))
+            {
+                bool running = st != 0;
+                if (currentState == null)
+                {
+                    currentState = running;
+                    segStart = ts;
+                }
+                else if (running != currentState.Value)
+                {
+                    data.States.Add(new[] { segStart, ts, currentState.Value ? 1.0 : 0.0 });
+                    currentState = running;
+                    segStart = ts;
+                }
+            }
+            lastTs = ts;
+        }
+
+        if (currentState != null && lastTs > segStart)
+            data.States.Add(new[] { segStart, lastTs, currentState.Value ? 1.0 : 0.0 });
+
+        return data;
+    }
+
+    private static bool TryTimestamp(object o, bool isUtc, out double ms)
+    {
+        ms = 0;
+        if (o == null || o is DBNull) return false;
+        try
+        {
+            DateTime dt = o is DateTime ? (DateTime)o : Convert.ToDateTime(o, CultureInfo.InvariantCulture);
+            if (dt.Kind == DateTimeKind.Unspecified)
+                dt = DateTime.SpecifyKind(dt, isUtc ? DateTimeKind.Utc : DateTimeKind.Local);
+            ms = (dt.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static bool TryNumber(object o, out double v)
+    {
+        v = 0;
+        if (o == null || o is DBNull) return false;
+        try
+        {
+            if (o is bool) { v = (bool)o ? 1 : 0; return true; }
+            v = Convert.ToDouble(o, CultureInfo.InvariantCulture);
+            return !(double.IsNaN(v) || double.IsInfinity(v));
+        }
+        catch { return false; }
+    }
+
+    private static string Quote(string id)
+    {
+        return "[" + id.Trim().Trim('[', ']').Replace("]", "]]") + "]";
+    }
+
+    private static string QuoteTable(string table)
+    {
+        var parts = table.Split('.');
+        for (int i = 0; i < parts.Length; i++) parts[i] = Quote(parts[i]);
+        return string.Join(".", parts);
+    }
+
+    // ------------------------------------------------------------------
+    // JSON / HTML
+    // ------------------------------------------------------------------
+    private string BuildJson(ChartData d, double? max, double? min)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"config\":{");
+        sb.Append("\"max\":").Append(Num(max)).Append(",");
+        sb.Append("\"min\":").Append(Num(min)).Append(",");
+        sb.Append("\"unit\":\"").Append(Esc(GetString("Unit", "t/h"))).Append("\",");
+        sb.Append("\"title\":\"").Append(Esc(GetString("Title", "Feeder Mill - Feed Rate"))).Append("\"},");
+        sb.Append("\"feedRate\":"); AppendPoints(sb, d.FeedRate); sb.Append(",");
+        sb.Append("\"setPoint\":"); AppendPoints(sb, d.SetPoint); sb.Append(",");
+        sb.Append("\"states\":"); AppendPoints(sb, d.States);
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private static void AppendPoints(StringBuilder sb, List<double[]> list)
+    {
+        sb.Append("[");
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (i > 0) sb.Append(",");
+            sb.Append("[");
+            for (int j = 0; j < list[i].Length; j++)
+            {
+                if (j > 0) sb.Append(",");
+                // Timestamps (and 0/1 states) as whole numbers, values with full precision
+                sb.Append(j < 2 && list[i].Length == 3 || j == 0
+                    ? list[i][j].ToString("F0", CultureInfo.InvariantCulture)
+                    : list[i][j].ToString("R", CultureInfo.InvariantCulture));
+            }
+            sb.Append("]");
+        }
+        sb.Append("]");
+    }
+
+    private static string Num(double? v)
+    {
+        return v.HasValue ? v.Value.ToString("R", CultureInfo.InvariantCulture) : "null";
+    }
+
+    private static string Esc(string s)
+    {
+        var sb = new StringBuilder();
+        foreach (char c in s)
+        {
+            if (c == '\\' || c == '"') sb.Append('\\').Append(c);
+            else if (c < 32) sb.Append(' ');
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private string BuildHtml(string json)
+    {
+        string echartsSrc = GetString("EChartsScriptUrl",
+            "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js");
+
+        // Page re-reads the file at the same rate the NetLogic rewrites it
+        string reloadMeta = "";
+        if (GetBool("AutoReloadPage", true))
+        {
+            int sec = Math.Max(2, GetInt("RefreshRateMs", 10000) / 1000);
+            reloadMeta = "<meta http-equiv='refresh' content='" + sec + "'>";
+        }
+
+        return HtmlTemplate
+            .Replace("__RELOAD_META__", reloadMeta)
+            .Replace("__ECHARTS_SRC__", echartsSrc)
+            .Replace("__DATA_JSON__", json);
+    }
+
+    // ------------------------------------------------------------------
+    // Output file + WebBrowser
+    // ------------------------------------------------------------------
+    private void PublishHtml(string html)
+    {
+        string rel = GetString("OutputFile", "ChartFiles/FeederMillChart.html");
+        string full = ResourceUri.FromProjectRelativePath(rel).Uri;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(full));
+        string tmp = full + ".tmp";
+        File.WriteAllText(tmp, html, new UTF8Encoding(false));
+        File.Copy(tmp, full, true);
+        File.Delete(tmp);
+
+        SetBrowserUrl(full);
+    }
+
+    private void SetBrowserUrl(string fullPath)
+    {
+        // If BrowserUrl is set (e.g. an http:// address that serves the file) it wins,
+        // otherwise a file:// URL to the generated file is used.
+        string url = GetString("BrowserUrl", "");
+        if (url == "") url = new Uri(fullPath).AbsoluteUri;
+        if (url == lastUrl) return;
+
+        var ptr = LogicObject.GetVariable("WebBrowser");
+        if (ptr == null)
+        {
+            Log.Warning("FeederMillChartLogic", "Variable 'WebBrowser' (NodePointer) not found.");
+            return;
+        }
+
+        var browser = InformationModel.Get((NodeId)ptr.Value.Value);
+        var urlVar = browser == null ? null : browser.GetVariable("URL");
+        if (urlVar == null)
+        {
+            Log.Warning("FeederMillChartLogic", "'WebBrowser' does not point to a WebBrowser with a URL property.");
+            return;
+        }
+
+        urlVar.Value = url;
+        lastUrl = url;
+    }
+
+    // ------------------------------------------------------------------
+    // Variable helpers (all optional: fall back to the defaults above)
+    // ------------------------------------------------------------------
+    private string GetString(string name, string def)
+    {
+        var v = LogicObject.GetVariable(name);
+        if (v == null || v.Value == null || v.Value.Value == null) return def;
+        string s = v.Value.Value.ToString();
+        return string.IsNullOrWhiteSpace(s) ? def : s;
+    }
+
+    private int GetInt(string name, int def)
+    {
+        var v = LogicObject.GetVariable(name);
+        if (v == null || v.Value == null || v.Value.Value == null) return def;
+        try { return Convert.ToInt32(v.Value.Value, CultureInfo.InvariantCulture); }
+        catch { return def; }
+    }
+
+    private bool GetBool(string name, bool def)
+    {
+        var v = LogicObject.GetVariable(name);
+        if (v == null || v.Value == null || v.Value.Value == null) return def;
+        try { return Convert.ToBoolean(v.Value.Value, CultureInfo.InvariantCulture); }
+        catch { return def; }
+    }
+
+    private double? GetNullableDouble(string name)
+    {
+        var v = LogicObject.GetVariable(name);
+        if (v == null || v.Value == null || v.Value.Value == null) return null;
+        try
+        {
+            double d = Convert.ToDouble(v.Value.Value, CultureInfo.InvariantCulture);
+            return (double.IsNaN(d) || double.IsInfinity(d)) ? (double?)null : d;
+        }
+        catch { return null; }
+    }
+
+    // ------------------------------------------------------------------
+    // HTML template (no double quotes inside, so it is safe in a verbatim string)
+    // ------------------------------------------------------------------
+    private const string HtmlTemplate = @"<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8' />
+__RELOAD_META__
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; }
+  #chart-container { width: 100%; height: 100%; }
+  .dv { padding: 10px; color: #ddd; font-size: 13px; }
+  .dv h4 { margin: 12px 0 8px; }
+  .dv table { border-collapse: collapse; width: 100%; }
+  .dv th, .dv td { border: 1px solid #555; padding: 4px 10px; text-align: left; }
+  .dv th { background: #333; }
+  .run { color: #2ecc71; }
+  .stop { color: #e74c3c; }
+</style>
+<script src='__ECHARTS_SRC__'></script>
+</head>
+<body>
+<div id='chart-container'></div>
+
+<script>
+var chartData = __DATA_JSON__;
+var cfg = chartData.config;
+
+var STATE_STYLE = {
+  1: { name: 'Running', color: '#2ecc71' },
+  0: { name: 'Stopped', color: '#e74c3c' }
+};
+var TIME_FMT = '{yyyy}-{MM}-{dd} {HH}:{mm}:{ss}';
+
+var myChart = echarts.init(document.getElementById('chart-container'), 'dark', { renderer: 'canvas' });
+
+function renderState(params, api) {
+  var start = api.coord([api.value(0), 0]);
+  var end   = api.coord([api.value(1), 0]);
+  var h     = api.size([0, 1])[1];
+  var rect  = echarts.graphic.clipRectByRect(
+    { x: start[0], y: params.coordSys.y, width: end[0] - start[0], height: h },
+    { x: params.coordSys.x, y: params.coordSys.y,
+      width: params.coordSys.width, height: params.coordSys.height }
+  );
+  return rect && {
+    type: 'rect',
+    shape: rect,
+    style: api.style({ fill: STATE_STYLE[api.value(2)].color })
+  };
+}
+
+function buildDataView() {
+  var u = cfg.unit, rows = {};
+  chartData.feedRate.forEach(function (p) { (rows[p[0]] = rows[p[0]] || {}).fr = p[1]; });
+  chartData.setPoint.forEach(function (p) { (rows[p[0]] = rows[p[0]] || {}).sp = p[1]; });
+
+  var html = '<div class=dv><h4>Trend Data</h4><table><tr><th>Timestamp</th>' +
+             '<th>Actual FeedRate (' + u + ')</th><th>Actual SetPoint (' + u + ')</th></tr>';
+  Object.keys(rows).sort(function (a, b) { return a - b; }).forEach(function (k) {
+    var r = rows[k];
+    html += '<tr><td>' + echarts.time.format(+k, TIME_FMT) + '</td>' +
+            '<td>' + (r.fr !== undefined ? r.fr : '') + '</td>' +
+            '<td>' + (r.sp !== undefined ? r.sp : '') + '</td></tr>';
+  });
+  html += '</table><h4>Running State</h4><table><tr><th>Start</th><th>End</th><th>State</th></tr>';
+  chartData.states.forEach(function (s) {
+    html += '<tr><td>' + echarts.time.format(s[0], TIME_FMT) + '</td>' +
+            '<td>' + echarts.time.format(s[1], TIME_FMT) + '</td>' +
+            '<td class=' + (s[2] ? 'run' : 'stop') + '>' + STATE_STYLE[s[2]].name + '</td></tr>';
+  });
+  return html + '</table></div>';
+}
+
+// Limit lines only if the Optix variables provided a value
+var limitLines = [];
+if (cfg.max !== null) limitLines.push({
+  yAxis: cfg.max, name: 'Max',
+  lineStyle: { color: '#ff5252', type: 'dashed' },
+  label: { formatter: 'Max: {c}', position: 'insideEndTop' }
+});
+if (cfg.min !== null) limitLines.push({
+  yAxis: cfg.min, name: 'Min',
+  lineStyle: { color: '#ffb300', type: 'dashed' },
+  label: { formatter: 'Min: {c}', position: 'insideEndBottom' }
+});
+
+var option = {
+  backgroundColor: '#1e1e1e',
+  title: { text: cfg.title, left: 'center', top: 8 },
+  tooltip: { trigger: 'axis', axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }] } },
+  legend: { top: 36, data: ['Actual FeedRate', 'Actual SetPoint'] },
+  toolbox: {
+    right: 20,
+    feature: {
+      dataZoom: { yAxisIndex: 'none' },
+      dataView: {
+        title: 'Data View',
+        lang: ['Data View', 'Close', 'Refresh'],
+        readOnly: true,
+        optionToContent: buildDataView,
+        backgroundColor: '#262626',
+        textColor: '#ddd',
+        buttonColor: '#4a90ff',
+        buttonTextColor: '#fff'
+      },
+      magicType: { type: ['line', 'bar'], title: { line: 'Switch to Line', bar: 'Switch to Bar' } },
+      restore: {},
+      saveAsImage: {}
+    }
+  },
+  axisPointer: { link: [{ xAxisIndex: 'all' }] },
+
+  grid: [
+    { left: 70, right: 40, top: 85,    height: '56%' },
+    { left: 70, right: 40, top: '80%', height: 40 }
+  ],
+
+  xAxis: [
+    { type: 'time', gridIndex: 0, axisLabel: { show: false } },
+    { type: 'time', gridIndex: 1 }
+  ],
+  yAxis: [
+    {
+      type: 'value', gridIndex: 0, scale: true,
+      min: function (v) {
+        var m = v.min; if (cfg.min !== null) m = Math.min(m, cfg.min);
+        return isFinite(m) ? Math.floor(m - 2) : 0;
+      },
+      max: function (v) {
+        var m = v.max; if (cfg.max !== null) m = Math.max(m, cfg.max);
+        return isFinite(m) ? Math.ceil(m + 2) : 100;
+      },
+      name: 'FeedRate (' + cfg.unit + ')'
+    },
+    { type: 'value', gridIndex: 1, min: 0, max: 1, show: false }
+  ],
+
+  dataZoom: [
+    { type: 'inside', xAxisIndex: [0, 1] },
+    { type: 'slider', xAxisIndex: [0, 1], bottom: 5, height: 18 }
+  ],
+
+  series: [
+    {
+      name: 'Actual FeedRate', type: 'line', color: '#4a90ff',
+      xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, barMaxWidth: 12,
+      lineStyle: { width: 2 },
+      data: chartData.feedRate,
+      markLine: { symbol: 'none', silent: true, data: limitLines },
+      markPoint: {
+        symbol: 'pin', symbolSize: 50,
+        itemStyle: { color: '#4a90ff' },
+        label: { color: '#fff', formatter: '{c}' },
+        data: [ { type: 'max', name: 'FeedRate Max' }, { type: 'min', name: 'FeedRate Min' } ]
+      }
+    },
+    {
+      name: 'Actual SetPoint', type: 'line', color: '#2ecc71', step: 'end',
+      xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, barMaxWidth: 12,
+      lineStyle: { width: 2, type: 'solid' },
+      data: chartData.setPoint,
+      markPoint: {
+        symbol: 'pin', symbolSize: 50,
+        itemStyle: { color: '#2ecc71' },
+        label: { color: '#fff', formatter: '{c}' },
+        data: [ { type: 'max', name: 'SetPoint Max' }, { type: 'min', name: 'SetPoint Min' } ]
+      }
+    },
+    {
+      name: 'Running State', type: 'custom',
+      xAxisIndex: 1, yAxisIndex: 1,
+      renderItem: renderState,
+      encode: { x: [0, 1] },
+      tooltip: {
+        trigger: 'item',
+        formatter: function (p) {
+          var s = STATE_STYLE[p.value[2]];
+          return s.name + '<br/>' + echarts.time.format(p.value[0], TIME_FMT) +
+                 ' - ' + echarts.time.format(p.value[1], '{HH}:{mm}:{ss}');
+        }
+      },
+      data: chartData.states
+    }
+  ]
+};
+
+if (!chartData.feedRate.length) {
+  option.title.subtext = 'No data in the selected time range';
+}
+
+myChart.setOption(option);
+window.addEventListener('resize', function () { myChart.resize(); });
+</script>
+</body>
+</html>";
+}
