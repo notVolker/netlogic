@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; }
+  #chart-container { width: 100%; height: 100%; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+<div id="chart-container"></div>
+
+<script>
+// ===== DATA (NetLogic replaces this block, or edit it by hand for testing) =====
+// Timestamps are epoch milliseconds (or ISO strings).
+var chartData = /*__DATA__*/ {
+  config: { max: 60, min: 20, unit: 't/h' },   // Max / Min limit values
+  feedRate: [],   // [[timestamp, value], ...]
+  setPoint: [],   // [[timestamp, value], ...]
+  states:   []    // [[startTs, endTs, state], ...]  state: 1 = Running, 0 = Stopped
+};
+// ================================================================================
+
+// ---- Demo data so the chart renders in the ECharts editor / when no data is injected
+if (!chartData.feedRate.length) {
+  var now = Date.now(), step = 60 * 1000;   // 1-minute samples
+  for (var i = 0; i < 120; i++) {
+    var t = now - (120 - i) * step;
+    var sp = i < 60 ? 40 : 50;
+    chartData.setPoint.push([t, sp]);
+    chartData.feedRate.push([t, +(sp + (Math.random() * 6 - 3)).toFixed(2)]);
+  }
+  chartData.states = [
+    [now - 120 * step, now - 90 * step, 1],
+    [now - 90 * step,  now - 80 * step, 0],
+    [now - 80 * step,  now,             1]
+  ];
+}
+
+var STATE_STYLE = {
+  1: { name: 'Running', color: '#2ecc71' },
+  0: { name: 'Stopped', color: '#e74c3c' }
+};
+
+var TIME_FMT = '{yyyy}-{MM}-{dd} {HH}:{mm}:{ss}';
+
+var myChart = echarts.init(document.getElementById('chart-container'), 'dark', {
+  renderer: 'canvas'
+});
+
+// Custom series: draws one rectangle per [start, end, state] segment
+function renderState(params, api) {
+  var start = api.coord([api.value(0), 0]);
+  var end   = api.coord([api.value(1), 0]);
+  var h     = api.size([0, 1])[1];
+  var rect  = echarts.graphic.clipRectByRect(
+    { x: start[0], y: params.coordSys.y, width: end[0] - start[0], height: h },
+    { x: params.coordSys.x, y: params.coordSys.y,
+      width: params.coordSys.width, height: params.coordSys.height }
+  );
+  return rect && {
+    type: 'rect',
+    shape: rect,
+    style: api.style({ fill: STATE_STYLE[api.value(2)].color })
+  };
+}
+
+// Data View: builds readable tables (timestamps formatted) instead of the default dump
+function buildDataView() {
+  var u = chartData.config.unit;
+  var cellStyle = 'border:1px solid #555;padding:4px 10px;text-align:left;';
+  var rows = {};   // timestamp -> { fr, sp }
+
+  chartData.feedRate.forEach(function (p) {
+    var k = +new Date(p[0]);
+    (rows[k] = rows[k] || {}).fr = p[1];
+  });
+  chartData.setPoint.forEach(function (p) {
+    var k = +new Date(p[0]);
+    (rows[k] = rows[k] || {}).sp = p[1];
+  });
+
+  var html = '<div style="padding:10px;color:#ddd;font-size:13px;">';
+
+  html += '<h4 style="margin:4px 0 8px;">Trend Data</h4>' +
+          '<table style="border-collapse:collapse;width:100%;">' +
+          '<tr style="background:#333;">' +
+          '<th style="' + cellStyle + '">Timestamp</th>' +
+          '<th style="' + cellStyle + '">Actual FeedRate (' + u + ')</th>' +
+          '<th style="' + cellStyle + '">Actual SetPoint (' + u + ')</th></tr>';
+  Object.keys(rows).sort(function (a, b) { return a - b; }).forEach(function (k) {
+    var r = rows[k];
+    html += '<tr><td style="' + cellStyle + '">' + echarts.time.format(+k, TIME_FMT) + '</td>' +
+            '<td style="' + cellStyle + '">' + (r.fr !== undefined ? r.fr : '') + '</td>' +
+            '<td style="' + cellStyle + '">' + (r.sp !== undefined ? r.sp : '') + '</td></tr>';
+  });
+  html += '</table>';
+
+  html += '<h4 style="margin:16px 0 8px;">Running State</h4>' +
+          '<table style="border-collapse:collapse;width:100%;">' +
+          '<tr style="background:#333;">' +
+          '<th style="' + cellStyle + '">Start</th>' +
+          '<th style="' + cellStyle + '">End</th>' +
+          '<th style="' + cellStyle + '">State</th></tr>';
+  chartData.states.forEach(function (s) {
+    html += '<tr><td style="' + cellStyle + '">' + echarts.time.format(s[0], TIME_FMT) + '</td>' +
+            '<td style="' + cellStyle + '">' + echarts.time.format(s[1], TIME_FMT) + '</td>' +
+            '<td style="' + cellStyle + 'color:' + STATE_STYLE[s[2]].color + ';">' +
+            STATE_STYLE[s[2]].name + '</td></tr>';
+  });
+  html += '</table></div>';
+
+  return html;
+}
+
+var option = {
+  backgroundColor: '#1e1e1e',
+  title: { text: 'Feeder Mill - Feed Rate', left: 'center', top: 8 },
+  tooltip: {
+    trigger: 'axis',
+    axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }] }
+  },
+  legend: { top: 36, data: ['Actual FeedRate', 'Actual SetPoint'] },
+  toolbox: {
+    right: 20,
+    feature: {
+      dataZoom: { yAxisIndex: 'none' },
+      dataView: {
+        title: 'Data View',
+        lang: ['Data View', 'Close', 'Refresh'],
+        readOnly: true,
+        optionToContent: buildDataView,
+        backgroundColor: '#262626',
+        textColor: '#ddd',
+        buttonColor: '#4a90ff',
+        buttonTextColor: '#fff'
+      },
+      magicType: {
+        type: ['line', 'bar'],
+        title: { line: 'Switch to Line', bar: 'Switch to Bar' }
+      },
+      restore: {},
+      saveAsImage: {}
+    }
+  },
+  axisPointer: { link: [{ xAxisIndex: 'all' }] },
+
+  // Two stacked grids: trend on top, Running State at the bottom
+  grid: [
+    { left: 70, right: 40, top: 85,    height: '56%' },
+    { left: 70, right: 40, top: '80%', height: 40 }
+  ],
+
+  xAxis: [
+    { type: 'time', gridIndex: 0, axisLabel: { show: false } },
+    { type: 'time', gridIndex: 1 }
+  ],
+  yAxis: [
+    {
+      type: 'value', gridIndex: 0, scale: true,
+      min: function (v) { return Math.floor(Math.min(v.min, chartData.config.min) - 2); },
+      max: function (v) { return Math.ceil(Math.max(v.max, chartData.config.max) + 2); },
+      name: 'FeedRate (' + chartData.config.unit + ')',
+      axisLabel: { formatter: '{value}' }
+    },
+    { type: 'value', gridIndex: 1, min: 0, max: 1, show: false }
+  ],
+
+  dataZoom: [
+    { type: 'inside', xAxisIndex: [0, 1] },
+    { type: 'slider', xAxisIndex: [0, 1], bottom: 5, height: 18 }
+  ],
+
+  series: [
+    {
+      name: 'Actual FeedRate',
+      type: 'line',
+      color: '#4a90ff',
+      xAxisIndex: 0, yAxisIndex: 0,
+      showSymbol: false,
+      barMaxWidth: 12,                    // only used when switched to bar
+      lineStyle: { width: 2 },
+      data: chartData.feedRate,
+      markLine: {
+        symbol: 'none',
+        silent: true,
+        data: [
+          {
+            yAxis: chartData.config.max, name: 'Max',
+            lineStyle: { color: '#ff5252', type: 'dashed' },
+            label: { formatter: 'Max: {c}', position: 'insideEndTop' }
+          },
+          {
+            yAxis: chartData.config.min, name: 'Min',
+            lineStyle: { color: '##ff5252', type: 'dashed' },
+            label: { formatter: 'Min: {c}', position: 'insideEndBottom' }
+          }
+        ]
+      },
+      markPoint: {
+        symbol: 'pin',
+        symbolSize: 50,
+        itemStyle: { color: '#4a90ff' },
+        label: { color: '#fff', formatter: '{c}' },
+        data: [
+          { type: 'max', name: 'FeedRate Max' },
+          { type: 'min', name: 'FeedRate Min' }
+        ]
+      }
+    },
+    {
+      name: 'Actual SetPoint',
+      type: 'line',
+      color: '#2ecc71',
+      step: 'end',                        // setpoint changes in steps
+      xAxisIndex: 0, yAxisIndex: 0,
+      showSymbol: false,
+      barMaxWidth: 12,                    // only used when switched to bar
+      lineStyle: { width: 2, type: 'solid' },
+      data: chartData.setPoint,
+      markPoint: {
+        symbol: 'pin',
+        symbolSize: 50,
+        itemStyle: { color: '#2ecc71' },
+        label: { color: '#fff', formatter: '{c}' },
+        data: [
+          { type: 'max', name: 'SetPoint Max' },
+          { type: 'min', name: 'SetPoint Min' }
+        ]
+      }
+    },
+    {
+      name: 'Running State',
+      type: 'custom',
+      xAxisIndex: 1, yAxisIndex: 1,
+      renderItem: renderState,
+      encode: { x: [0, 1] },
+      tooltip: {
+        trigger: 'item',
+        formatter: function (p) {
+          var s = STATE_STYLE[p.value[2]];
+          return s.name + '<br/>' +
+                 echarts.time.format(p.value[0], TIME_FMT) + ' → ' +
+                 echarts.time.format(p.value[1], '{HH}:{mm}:{ss}');
+        }
+      },
+      data: chartData.states
+    }
+  ]
+};
+
+myChart.setOption(option);
+window.addEventListener('resize', function () { myChart.resize(); });
+
+// Optional: lets you push fresh data later if your setup allows calling JS in the page
+window.updateChart = function (d) {
+  chartData.feedRate = d.feedRate;
+  chartData.setPoint = d.setPoint;
+  chartData.states   = d.states;
+  myChart.setOption({
+    series: [
+      { name: 'Actual FeedRate', data: d.feedRate },
+      { name: 'Actual SetPoint', data: d.setPoint },
+      { name: 'Running State',   data: d.states }
+    ]
+  });
+};
+</script>
+</body>
+</html>
